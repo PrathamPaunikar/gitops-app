@@ -1,0 +1,51 @@
+name: CI pipeline
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      ECR_REGISTRY: 906401006480.dkr.ecr.ap-south-2.amazonaws.com
+      ECR_REPO: gitops-app
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run tests
+      run: |
+        pip install -r requirements.txt
+        pytest tests/ -v
+
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::906401006480:role/github-actions-gitops-role
+        aws-region: ap-south-2
+
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and push Docker image
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG
+
+    - name: Update image tag in config repo
+      run: |
+        git clone https://x-access-token:${{ secrets.CONFIG_REPO_PAT }}@github.com/PrathamPaunikar/gitops-k8s-config.git
+        cd gitops-k8s-config
+        sed -i "s|image:.*|image: $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG|" k8s/dev/deployment.yaml
+        git config user.email "ci@github.com"
+        git config user.name "GitHub Actions"
+        git add k8s/dev/deployment.yaml
+        git commit -m "ci: update dev image to $IMAGE_TAG"
+        git push
